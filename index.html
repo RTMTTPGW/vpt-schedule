@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ВПТ — Расписание</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#6c63ff">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ВПТ">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;700;900&family=Golos+Text:wght@400;500;600&display=swap" rel="stylesheet">
@@ -384,6 +390,41 @@
 
   footer a { color: var(--accent); text-decoration: none; }
 
+  /* Список групп */
+  .groups-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .group-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    cursor: pointer;
+    color: var(--text);
+    font-family: 'Golos Text', sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    text-align: left;
+    transition: all 0.15s;
+  }
+
+  .group-btn:hover { border-color: var(--accent); background: var(--surface2); }
+  .group-btn.active {
+    border-color: var(--accent);
+    background: var(--surface2);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+
+  .groups-loading {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 14px;
+    padding: 20px;
+  }
+
   @media (max-width: 480px) {
     .corps-grid { grid-template-columns: repeat(2, 1fr); }
     header { padding: 28px 0 20px; }
@@ -414,19 +455,26 @@
 
   <!-- Группа -->
   <div class="section">
-    <div class="section-label">Группа</div>
-    <div class="search-wrap">
-      <input
-        class="search-input"
-        id="group-input"
-        type="text"
-        placeholder="Например: 2-24 ОРП-1"
-        autocomplete="off"
-        autocorrect="off"
-        spellcheck="false"
-      >
+    <div class="section-label">Курс</div>
+    <div class="corps-grid" id="course-grid">
+      <button class="corp-btn" data-course="1" onclick="selectCourse(1, this)">
+        <span class="corp-num">1</span><span>1 курс</span>
+      </button>
+      <button class="corp-btn" data-course="2" onclick="selectCourse(2, this)">
+        <span class="corp-num">2</span><span>2 курс</span>
+      </button>
+      <button class="corp-btn" data-course="3" onclick="selectCourse(3, this)">
+        <span class="corp-num">3</span><span>3 курс</span>
+      </button>
+      <button class="corp-btn" data-course="4" onclick="selectCourse(4, this)">
+        <span class="corp-num">4</span><span>4 курс</span>
+      </button>
     </div>
-    <div class="search-hint">Введи название точно как в таблице расписания</div>
+  </div>
+
+  <div class="section" id="groups-section" style="display:none">
+    <div class="section-label">Группа</div>
+    <div id="groups-list" class="groups-list"></div>
   </div>
 
   <!-- Режим -->
@@ -454,35 +502,139 @@
 
 <script>
 const API = 'https://vpt-schedule-bot-v2-production.up.railway.app';
-let selectedCorp = null;
-let selectedMode = 'today';
+const CACHE_TTL = 10 * 60 * 1000; // 10 минут
+
+let selectedCorp   = null;
+let selectedCourse = null;
+let selectedGroup  = null;
+let selectedMode   = 'today';
+
+// ── Кэш ───────────────────────────────────────────────────────────────────
+
+function cacheSet(key, data) {
+  try {
+    localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }));
+  } catch(e) {}
+}
+
+function cacheGet(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const { ts, data } = JSON.parse(raw);
+    if (Date.now() - ts > CACHE_TTL) return null;
+    return data;
+  } catch(e) { return null; }
+}
 
 // ── Загрузка корпусов ──────────────────────────────────────────────────────
 
 async function loadCorps() {
+  const cached = cacheGet('corps');
+  if (cached) { renderCorps(cached); return; }
   try {
     const res = await fetch(`${API}/corps`);
     const corps = await res.json();
-    const grid = document.getElementById('corps-grid');
-    grid.innerHTML = '';
-    corps.forEach(c => {
-      const btn = document.createElement('button');
-      btn.className = 'corp-btn';
-      btn.dataset.id = c.id;
-      btn.innerHTML = `<span class="corp-num">${c.name.replace(' корпус','')}</span><span>${c.name}</span>`;
-      btn.onclick = () => selectCorp(c.id, btn);
-      grid.appendChild(btn);
-    });
+    cacheSet('corps', corps);
+    renderCorps(corps);
   } catch(e) {
     document.getElementById('corps-grid').innerHTML =
       '<div class="state-box" style="grid-column:1/-1"><div class="state-text">Ошибка загрузки корпусов</div></div>';
   }
 }
 
-function selectCorp(id, btn) {
-  selectedCorp = id;
-  document.querySelectorAll('.corp-btn').forEach(b => b.classList.remove('active'));
+function renderCorps(corps) {
+  const grid = document.getElementById('corps-grid');
+  grid.innerHTML = '';
+  corps.forEach(c => {
+    const btn = document.createElement('button');
+    btn.className = 'corp-btn';
+    btn.dataset.id = c.id;
+    btn.innerHTML = `<span class="corp-num">${c.name.replace(' корпус','')}</span><span>${c.name}</span>`;
+    btn.onclick = () => {
+      selectedCorp = c.id;
+      document.querySelectorAll('#corps-grid .corp-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      // Сбрасываем выбор курса и группы
+      selectedCourse = null;
+      selectedGroup  = null;
+      document.querySelectorAll('#course-grid .corp-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('groups-section').style.display = 'none';
+    };
+    grid.appendChild(btn);
+  });
+}
+
+// ── Выбор курса ───────────────────────────────────────────────────────────
+
+function selectCourse(course, btn) {
+  if (!selectedCorp) {
+    showToast('Сначала выбери корпус');
+    return;
+  }
+  selectedCourse = course;
+  selectedGroup  = null;
+  document.querySelectorAll('#course-grid .corp-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
+  loadGroups(selectedCorp, course);
+}
+
+async function loadGroups(corpId, course) {
+  const section = document.getElementById('groups-section');
+  const list    = document.getElementById('groups-list');
+  section.style.display = 'block';
+  list.innerHTML = '<div class="groups-loading">⌛ Загружаю группы...</div>';
+
+  const cacheKey = `groups:${corpId}`;
+  let allGroups = cacheGet(cacheKey);
+
+  if (!allGroups) {
+    try {
+      const res = await fetch(`${API}/groups?corp=${encodeURIComponent(corpId)}`);
+      const data = await res.json();
+      allGroups = data.groups || [];
+      cacheSet(cacheKey, allGroups);
+    } catch(e) {
+      list.innerHTML = '<div class="groups-loading">Ошибка загрузки групп</div>';
+      return;
+    }
+  }
+
+  // Фильтруем по курсу
+  const now = new Date();
+  const currentYear = now.getFullYear() % 100;
+  const entryYear = now.getMonth() >= 8
+    ? currentYear - course + 1
+    : currentYear - course;
+
+  const filtered = allGroups.filter(g => {
+    const m = g.match(/^\d+-(\d{2})/);
+    return m && parseInt(m[1]) === entryYear % 100;
+  });
+
+  const groups = filtered.length > 0 ? filtered : allGroups;
+
+  if (groups.length === 0) {
+    list.innerHTML = '<div class="groups-loading">Группы не найдены</div>';
+    return;
+  }
+
+  list.innerHTML = '';
+  groups.forEach(g => {
+    // Показываем короткое название (до названия специальности)
+    const short = g.match(/^([\d\-]+\s+[А-ЯЁA-Z]+[\-\d]+)/);
+    const label = short ? short[1].trim() : g.trim();
+    const btn = document.createElement('button');
+    btn.className = 'group-btn';
+    btn.textContent = label;
+    btn.title = g;
+    btn.onclick = () => {
+      selectedGroup = g;
+      document.querySelectorAll('.group-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    };
+    list.appendChild(btn);
+  });
 }
 
 // ── Режим ─────────────────────────────────────────────────────────────────
@@ -495,27 +647,28 @@ document.querySelectorAll('.mode-tab').forEach(tab => {
   };
 });
 
-// ── Enter в поле группы ───────────────────────────────────────────────────
-
-document.getElementById('group-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') getSchedule();
-});
-
 // ── Получить расписание ───────────────────────────────────────────────────
 
 document.getElementById('btn-get').onclick = getSchedule;
 
 async function getSchedule() {
-  const group = document.getElementById('group-input').value.trim();
-  const btn   = document.getElementById('btn-get');
+  const btn    = document.getElementById('btn-get');
   const result = document.getElementById('result');
 
   if (!selectedCorp) {
-    showError(result, '🏢', 'Выбери корпус', 'Нажми на один из корпусов выше');
+    showToast('Выбери корпус');
     return;
   }
-  if (!group) {
-    showError(result, '👥', 'Введи группу', 'Напиши название группы в поле выше');
+  if (!selectedGroup) {
+    showToast('Выбери группу из списка');
+    return;
+  }
+
+  const cacheKey = `schedule:${selectedCorp}:${selectedGroup}:${selectedMode}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) {
+    renderSchedule(result, cached);
+    result.scrollIntoView({ behavior: 'smooth', block: 'start' });
     return;
   }
 
@@ -524,25 +677,20 @@ async function getSchedule() {
   showLoading(result);
 
   try {
-    const url = `${API}/schedule?corp=${encodeURIComponent(selectedCorp)}&group=${encodeURIComponent(group)}&mode=${selectedMode}`;
+    const url = `${API}/schedule?corp=${encodeURIComponent(selectedCorp)}&group=${encodeURIComponent(selectedGroup)}&mode=${selectedMode}`;
     const res = await fetch(url);
 
     if (res.status === 404) {
       const err = await res.json();
-      if (err.detail.includes('Группа')) {
-        showError(result, '🔍', 'Группа не найдена',
-          `Группа <b>${group}</b> не найдена в файле расписания.<br>Проверь название — оно должно совпадать с таблицей.`);
-      } else {
-        showError(result, '📭', 'Нет файлов', 'Файлов расписания не найдено в папке Drive');
-      }
+      showError(result, '🔍', 'Не найдено', err.detail || 'Расписание не найдено');
       return;
     }
-
     if (!res.ok) throw new Error(await res.text());
 
     const data = await res.json();
+    cacheSet(cacheKey, data);
     renderSchedule(result, data);
-
+    result.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch(e) {
     showError(result, '⚠️', 'Ошибка', 'Не удалось загрузить расписание. Попробуй ещё раз.');
   } finally {
@@ -551,19 +699,34 @@ async function getSchedule() {
   }
 }
 
+// ── Toast ─────────────────────────────────────────────────────────────────
+
+function showToast(msg) {
+  let toast = document.getElementById('toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'toast';
+    toast.style.cssText = `
+      position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
+      background:#6c63ff;color:#fff;padding:10px 20px;border-radius:20px;
+      font-size:14px;z-index:999;opacity:0;transition:opacity 0.2s;
+      font-family:'Golos Text',sans-serif;pointer-events:none;
+    `;
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.style.opacity = '1';
+  setTimeout(() => toast.style.opacity = '0', 2000);
+}
+
 // ── Рендер расписания ─────────────────────────────────────────────────────
 
 function renderSchedule(container, data) {
   if (!data.pairs || data.pairs.length === 0) {
-    container.innerHTML = `
-      <div class="empty-day">
-        🎉 Занятий нет! Свободный день.
-      </div>`;
+    container.innerHTML = '<div class="empty-day">🎉 Занятий нет! Свободный день.</div>';
     return;
   }
-
   const dateStr = data.date ? `${data.date}${data.day ? ', ' + data.day : ''}` : '';
-
   const pairsHtml = data.pairs.map(p => `
     <div class="pair-item">
       <div class="pair-num">${p.num}</div>
@@ -576,7 +739,6 @@ function renderSchedule(container, data) {
       </div>
     </div>
   `).join('');
-
   container.innerHTML = `
     <div class="schedule-header">
       <div class="schedule-date">${dateStr || 'Расписание'}</div>
@@ -593,33 +755,27 @@ function renderSchedule(container, data) {
 // ── Хелперы ───────────────────────────────────────────────────────────────
 
 function showLoading(container) {
-  container.innerHTML = `
-    <div class="state-box">
-      <div class="spinner"></div>
-      <div class="state-text">Загружаю расписание...</div>
-    </div>`;
+  container.innerHTML = `<div class="state-box"><div class="spinner"></div><div class="state-text">Загружаю расписание...</div></div>`;
 }
 
 function showError(container, icon, title, text) {
-  container.innerHTML = `
-    <div class="state-box">
-      <div class="state-icon">${icon}</div>
-      <div class="state-title">${title}</div>
-      <div class="state-text">${text}</div>
-    </div>`;
+  container.innerHTML = `<div class="state-box"><div class="state-icon">${icon}</div><div class="state-title">${title}</div><div class="state-text">${text}</div></div>`;
 }
 
 function escHtml(str) {
-  return String(str)
-    .replace(/&/g,'&amp;')
-    .replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;');
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 function pluralPairs(n) {
   if (n % 10 === 1 && n % 100 !== 11) return 'пара';
   if ([2,3,4].includes(n % 10) && ![12,13,14].includes(n % 100)) return 'пары';
   return 'пар';
+}
+
+// ── PWA Service Worker ─────────────────────────────────────────────────────
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
 // ── Telegram WebApp ───────────────────────────────────────────────────────
